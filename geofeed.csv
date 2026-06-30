@@ -1,0 +1,9 @@
+# RFC 8805 geofeed for AS149794
+# prefix,country_code,region_code,city,postal
+103.176.189.0/24,IN,IN-KA,Bengaluru,560001
+103.174.210.0/24,IN,IN-ML,Shillong,793001
+122.99.126.0/23,,,,
+2400:7060::/32,IN,IN-ML,Shillong,793001
+2400:7060::/44,IN,IN-KA,Bengaluru,560001
+2400:7060:10::/44,IN,IN-KA,Bengaluru,560066
+2400:7060:80::/44,IN,IN-ML,Shillong,793001
