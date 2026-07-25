@@ -1,0 +1,21 @@
+name: Validate geofeed
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Validate RFC 8805 CSV
+        run: python3 scripts/validate_geofeed.py geofeed.csv
+
+      - name: Check APNIC WHOIS authority and RPKI validity
+        run: >
+          python3 scripts/check_authority.py
+          --geofeed geofeed.csv
+          --asn 149794
