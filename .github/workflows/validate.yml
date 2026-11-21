@@ -2,20 +2,39 @@ name: Validate geofeed
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
 
-      - name: Validate RFC 8805 CSV
-        run: python3 scripts/validate_geofeed.py geofeed.csv
+      - name: Install pinned ISO data
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements.txt
 
-      - name: Check APNIC WHOIS authority and RPKI validity
-        run: >
-          python3 scripts/check_authority.py
-          --geofeed geofeed.csv
-          --asn 149794
+      - name: Validate candidate and show location changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base=()
+          if [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${BASE_SHA}:geofeed.csv" 2>/dev/null; then
+            git cat-file blob "${BASE_SHA}:geofeed.csv" > "$RUNNER_TEMP/geofeed-base.csv"
+            base=(--base "$RUNNER_TEMP/geofeed-base.csv")
+          fi
+          .venv/bin/python scripts/validate_geofeed.py geofeed.csv "${base[@]}"
+
+      - name: Run offline tests
+        run: .venv/bin/python -m unittest discover -s tests

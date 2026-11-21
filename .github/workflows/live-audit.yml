@@ -1,0 +1,85 @@
+name: Live geofeed checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '30 6 * * 6'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  live:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 140
+    concurrency:
+      group: geofeed-live-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+    outputs:
+      audit: ${{ steps.checks.outputs.audit }}
+      publication: ${{ steps.checks.outputs.publication }}
+    steps:
+      - name: Check out run revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned ISO data
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements.txt
+
+      - name: Audit and verify accepted publication
+        id: checks
+        run: |
+          run_check() {
+            local mode="$1" status=0
+            local file="$RUNNER_TEMP/geofeed-$mode.json"
+            shift
+            .venv/bin/python scripts/check_authority.py --mode "$mode" --asn 149794 \
+              --revision "$GITHUB_SHA" --json-report "$file" "$@" || status=$?
+            if [[ -s "$file" ]]; then
+              printf '%s=%s\n' "$mode" "$(<"$file")" >> "$GITHUB_OUTPUT"
+            fi
+            return "$status"
+          }
+          status=0
+          run_check audit || status=$?
+          if [[ "$GITHUB_EVENT_NAME" != pull_request ]]; then
+            run_check publication --repository "$GITHUB_REPOSITORY" || status=$?
+          fi
+          exit "$status"
+
+  publish-issue:
+    needs: live
+    if: >-
+      ${{ always() && !cancelled() && github.repository == 'daryll-swer/ip-geofeed'
+        && github.ref == 'refs/heads/main' && (github.event_name == 'push'
+        || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: geofeed-trusted-issue-publisher
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Check out trusted run revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Reconcile tracking issue
+        env:
+          AUDIT_REPORT: ${{ needs.live.outputs.audit }}
+          PUBLICATION_REPORT: ${{ needs.live.outputs.publication }}
+          GH_ISSUE_TOKEN: ${{ github.token }}
+        run: python3 scripts/update_issue.py --apply
