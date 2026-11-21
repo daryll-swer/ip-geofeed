@@ -2,7 +2,7 @@
 
 ## Scope and State
 
-Status: deployment authorised and in progress. Local implementation and review are complete. Publish through a pull request with the required `validate` check, then verify trusted workflows, exact CRLF publication and tracking-issue behaviour. No protection changes or forced updates are authorised. Geofeed rows, values, postal codes and comments are unchanged; only line endings changed to CRLF.
+Status: deployed and verified. Implementation and its token-compatibility correction were published through protected pull requests with the required `validate` check. Trusted workflows, exact CRLF publication and healthy tracking-issue behaviour passed. No repository protections were changed or bypassed. Geofeed rows, values, postal codes and comments are unchanged; only line endings changed to CRLF.
 
 This approved implementation supersedes the earlier documentation-only task. Its historical validation passed nine geofeed prefixes and six observed origin routes, not the new implementation.
 
@@ -53,6 +53,7 @@ This approved implementation supersedes the earlier documentation-only task. Its
 - [x] Implement offline tests and least-privileged workflows/issue reporting.
 - [x] Update current docs, add the new ADR and cross-check against implementation.
 - [x] Independently review and run tests, bounded live checks and privacy/scope checks.
+- [x] Publish through protected pull requests and verify production workflows, CRLF bytes and healthy issue behaviour.
 
 ## Acceptance and Residual Limits
 
@@ -65,9 +66,9 @@ Run local validators, offline tests, git diff --check, byte/data preservation, b
 Verified locally on 2026-11-21:
 
 - `python3 scripts/validate_geofeed.py geofeed.csv`, using the isolated environment: exit 0, nine prefixes and policy valid. Own LF rejection and independent LF acceptance with a warning are covered.
-- `python3 -W error -m unittest discover -s tests`, using the isolated environment: 45 tests passed with warnings treated as errors. Coverage includes registry hierarchy, dormant leased-space ROAs, IRR fallback restrictions, empty observations, byte equality, fake-clock convergence, deadlines, redirects, framing, DNS pinning and issue recovery.
+- `python3 -W error -m unittest discover -s tests`, using the isolated environment: 50 tests passed with warnings treated as errors. Coverage includes registry hierarchy, dormant leased-space ROAs, IRR fallback restrictions, empty observations, byte equality, fake-clock convergence, deadlines, redirects, framing, DNS pinning, opaque credential handling and issue recovery.
 - CSV comparison against the base revision confirms unchanged fields, comments and ordering: 414 to 425 bytes, eleven CRLF records. Git attributes disable CSV newline conversion.
-- `python3 scripts/check_authority.py --geofeed geofeed.csv --asn 149794`, using the isolated environment: exit 1 solely for `fetched-publication-requires-crlf`. Current production still serves LF. Input, BGP, RPKI and authority stages passed; seven observed prefixes, 23 collectors, 2,341 matching paths. RIPEstat snapshot: `2026-11-21T13:59:48+00:00`. No external service failure was observed.
+- Before deployment, the documented live audit exited 1 solely for the then-published LF file. This transition finding is resolved; the production checks below passed after CRLF publication.
 - CLI help and the issue publisher's no-authorisation refusal were checked, including a standard-library-only invocation. No issue writes were performed.
 - Both workflow files parsed as YAML. Workflow trust-boundary tests pass. Python 3.10 grammar checks pass for all 16 source/test modules; runtime tests used Python 3.15.2, not Python 3.10. Dependency consistency check passes.
 - The checkout Action pin resolves to the official [v7.0.1 release commit](https://github.com/actions/checkout/commit/3d3c42e5aac5ba805825da76410c181273ba90b1).
@@ -76,20 +77,24 @@ Verified locally on 2026-11-21:
 
 ## Remaining Limits
 
-- Live publication equality is not expected until an approved commit publishes CRLF. The currently deployed LF feed is a known transition finding, not permission to bypass checks or publish now.
-- The full two-hour convergence and issue lifecycle were tested with fake clocks/transports, not by waiting on production or writing issues. Trusted GitHub runner execution, repository protection configuration and notification delivery were not verified or changed.
+- The full two-hour timeout and issue create/reopen/update/close lifecycle were tested with fake clocks/transports. Production convergence and the healthy no-issue path were observed, but no artificial faults or issue transitions were injected into production.
+- Trusted GitHub execution and existing repository protections were verified. Scheduled delivery and personal notification delivery remain unverified; no notification or protection settings were changed.
 - Unsigned operation, plaintext WHOIS URL binding, partial BGP visibility and human-supplied geographic truth remain accepted boundaries. RDAP corroboration and route-origin validation do not sign the feed.
 - Serialisation and currency checks reduce stale issue updates but cannot make separate GitHub API requests atomic. A current run reconciles the issue after a race.
 - The bounded transport supports HTTP/1.1 with identity or a single gzip stream, not every possible HTTP encoding. Unsupported or limit-exceeding responses fail closed. Tests and review are not a formal proof of every network/parser state.
 
 These are known limits and unverified deployment steps, not authorisation for additional work.
 
+## Production Verification
+
+- [PR 1](https://github.com/daryll-swer/ip-geofeed/pull/1) published the implementation. Its first trusted run exposed a token-format compatibility defect in the issue publisher, while audit and publication verification passed.
+- [PR 2](https://github.com/daryll-swer/ip-geofeed/pull/2) corrected the defect as `9f1c398ccb9925bded7fb14d7b66f368c5790a33`. Tokens are now opaque, visible-ASCII strings bounded at 4,096 bytes. Whitespace/control rejection, fixed-origin authentication and no redirects are preserved. Synthetic credentials reproduced the old rejection; no real credential was retrieved or logged.
+- [Required validation run](https://github.com/daryll-swer/ip-geofeed/actions/runs/44933172821): success, nine prefixes and policy valid, all 50 tests passed.
+- [Trusted live and issue run](https://github.com/daryll-swer/ip-geofeed/actions/runs/44933172705): success. Audit and publication outcomes were `pass`; all seven observed routes passed RPKI. RIPEstat snapshot `2026-11-21T15:59:52+00:00`, 23 collectors and 2,347 matching paths.
+- The trusted issue job received issue-write permission and returned `issue-unchanged`. The repository had no tracking issues before or after this healthy run. This verifies absence of a spurious issue, not the live failure/recovery lifecycle.
+- From the operator-side check, both documented publication endpoints returned HTTP 200 and exactly matched the committed CSV: 425 bytes, eleven CRLF endings and zero bare LF. SHA-256: `2b3a14644b09722d2d2674f3319cc5dd889bb633e86227c47ae63a55b446ab16`. An initially stale CDN view converged without cache-busting parameters.
+- Both workflows are active. Required `validate`, strict up-to-date checks, administrator enforcement and disabled force pushes remain unchanged. Live checks remain separate from the required merge check.
+
 ## Next Action
 
-Deployment checkpoint: [PR 1](https://github.com/daryll-swer/ip-geofeed/pull/1) merged normally as `1c9d029a3318456e615182329d180a910fa0ce8d`. The required check passed. The trusted live job passed both audit and publication verification, but its separate issue publisher exited 2 with `issue-publisher-incomplete` in [run 44932637785](https://github.com/daryll-swer/ip-geofeed/actions/runs/44932637785). No tracking issue exists. A second geographic CDN view still served the old LF file within the convergence window.
-
-Diagnosis: the publisher's token-format whitelist rejects dots and limits tokens to 512 characters. GitHub's current installation tokens are longer and contain dots; its official guidance requires opaque handling. This reproduces the early refusal with synthetic data and is consistent with the live failure. The actual credential was not retrieved or logged. Real run-metadata, time-filter and issue-list queries were separately checked read-only and succeeded.
-
-The correction is implemented and reviewed locally: opaque visible-ASCII tokens are bounded at 4,096 bytes, with whitespace/control rejection before connection; credentials remain confined to the fixed GitHub API origin without redirects. Generic headers retain their existing limit. Named diagnostic codes disclose no credential values. All 50 offline tests pass, including a mocked healthy entry point with synthetic legacy/stateless tokens and transport boundary tests.
-
-Publish the correction through the same protected PR path, then recheck workflows, CDN byte equality and healthy issue behaviour. Record final evidence before completion. Do not introduce false production findings to exercise issue transitions.
+No further implementation or deployment work is pending. Use the weekly or manual audit for subsequent evidence, and investigate actual findings without weakening checks. A live fault-injection or issue-lifecycle exercise requires separate scoped approval; it is not an outstanding authorised task.
