@@ -26,6 +26,7 @@ DNS_SECONDS = 12
 UA = "AS149794-geofeed-ci/2.0"
 WHOIS_HOST = "whois.apnic.net"
 GITHUB = "https://api.github.com"
+GITHUB_TOKEN_LIMIT = 4096
 TRANSIENT = {408, 425, 429, 500, 502, 503, 504}
 REDIRECT = {301, 302, 303, 307, 308}
 TOKEN = re.compile(rb"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
@@ -354,6 +355,17 @@ def safe_header(value: str) -> bool:
     return bool(re.fullmatch(r"[ -~]{1,1024}", value))
 
 
+def validate_github_token(token: str) -> None:
+    # GitHub documents opaque, variable-length installation tokens:
+    # https://github.blog/changelog/2026-10-02-stateless-github-app-installation-tokens-rolled-out/
+    if not token:
+        raise FetchError("github-token-missing")
+    if len(token) > GITHUB_TOKEN_LIMIT:
+        raise FetchError("github-token-size-limit")
+    if not re.fullmatch(r"[!-~]+", token):
+        raise FetchError("github-token-unsafe-header")
+
+
 class Transport:
     def __init__(self, ports: frozenset[tuple[str, int]] = frozenset()) -> None:
         self.ports = ports
@@ -362,13 +374,20 @@ class Transport:
         self.context.load_default_certs()
 
     def _exchange(self, target: Target, deadline: Deadline, limit: int,
-                  extra: dict[str, str], method: str = "GET", body: bytes = b"") -> Response:
+                  extra: dict[str, str], method: str = "GET", body: bytes = b"", *,
+                  github_token: str | None = None) -> Response:
         request = {"Host": target.authority, "User-Agent": UA, "Connection": "close",
                    "Accept-Encoding": "gzip", **extra}
         if body:
             request.update({"Content-Type": "application/json", "Content-Length": str(len(body))})
-        if any(not safe_header(value) for value in request.values()):
+        if any(key.lower() == "authorization" or not safe_header(value)
+               for key, value in request.items()):
             raise FetchError("invalid-request-header")
+        if github_token is not None:
+            if target.host != "api.github.com" or target.port != 443:
+                raise FetchError("invalid-github-api-origin")
+            validate_github_token(github_token)
+            request["Authorization"] = "Bearer " + github_token
         message = f"{method} {target.path} HTTP/1.1\r\n"
         message += "".join(f"{key}: {value}\r\n" for key, value in request.items()) + "\r\n"
         try:
@@ -476,11 +495,11 @@ class Transport:
         if target.host != "api.github.com" or target.port != 443:
             raise FetchError("invalid-github-api-path")
         return self._exchange(target, deadline.child(30), 4 * 1024 * 1024,
-                              {"Authorization": "Bearer " + token,
-                               "Accept": "application/vnd.github+json",
+                              {"Accept": "application/vnd.github+json",
                                "Cache-Control": "no-cache",
                                "X-GitHub-Api-Version": "2022-11-28"},
-                              method, json.dumps(payload).encode() if payload is not None else b"")
+                              method, json.dumps(payload).encode() if payload is not None else b"",
+                              github_token=token)
 
 
 def decode_json(response: Response) -> dict:
