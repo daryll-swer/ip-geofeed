@@ -3,10 +3,11 @@ import socket
 import ssl
 import threading
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from support import Timer
-from transport import Clock, Deadline, FetchError, Reader, Response, Transport, dial, headers, read_body, resolve, url_target
+from transport import (GITHUB_TOKEN_LIMIT, Clock, Deadline, FetchError, Reader, Response,
+                       Transport, dial, headers, read_body, resolve, url_target)
 
 
 class Wire:
@@ -195,3 +196,42 @@ class TransportTests(unittest.TestCase):
             with self.assertRaisesRegex(FetchError, "invalid-github-api-path"):
                 client.github_write_api("@host.example", Timer().deadline, "token")
             request.assert_not_called()
+
+    def test_long_authorization_serialises_only_to_github_and_does_not_follow_redirects(self):
+        client = Transport()
+        token = "synthetic." + "a" * (GITHUB_TOKEN_LIMIT - len("synthetic."))
+        wire = MagicMock()
+        wire.__enter__.return_value = wire
+        wire.recv.return_value = (b"HTTP/1.1 302 Found\r\n"
+                                  b"Location: https://example.org/other\r\nContent-Length: 0\r\n\r\n")
+        with patch("transport.dial", return_value=wire) as connect:
+            result = client.github_write_api("/repos/owner/repo/issues", Timer().deadline, token)
+        self.assertEqual(result.status, 302)
+        connect.assert_called_once()
+        self.assertEqual(connect.call_args.args[:2], ("api.github.com", 443))
+        self.assertIs(connect.call_args.args[3], client.context)
+        sent = wire.sendall.call_args.args[0]
+        self.assertIn(("Authorization: Bearer " + token + "\r\n").encode("ascii"), sent)
+
+    def test_unsafe_authorization_and_oversized_generic_headers_fail_before_dial(self):
+        client = Transport()
+        budget = Timer().deadline
+        with patch("transport.dial") as connect:
+            for token, code in (("", "github-token-missing"),
+                                ("x" * (GITHUB_TOKEN_LIMIT + 1), "github-token-size-limit"),
+                                ("x\ny", "github-token-unsafe-header"),
+                                ("x\ty", "github-token-unsafe-header"),
+                                ("x y", "github-token-unsafe-header"),
+                                ("x\x7f", "github-token-unsafe-header")):
+                with self.subTest(code=code), self.assertRaisesRegex(FetchError, code):
+                    client.github_write_api("/repos/owner/repo/issues", budget, token)
+            with self.assertRaisesRegex(FetchError, "invalid-github-api-origin"):
+                client._exchange(url_target("https://example.org/"), budget, 100, {},
+                                 github_token="synthetic")
+            with self.assertRaisesRegex(FetchError, "invalid-request-header"):
+                client._exchange(url_target("https://example.org/"), budget, 100,
+                                 {"aUtHoRiZaTiOn": "Bearer synthetic"})
+            with self.assertRaisesRegex(FetchError, "invalid-request-header"):
+                client._exchange(url_target("https://example.org/"), budget, 100,
+                                 {"If-None-Match": "x" * 1025})
+            connect.assert_not_called()

@@ -86,4 +86,10 @@ These are known limits and unverified deployment steps, not authorisation for ad
 
 ## Next Action
 
-Commit the reviewed changes on a publication branch, open a pull request, wait for the required check and merge normally. Verify the resulting main workflows, APNIC-discovered publication bytes and tracking issue; record observed results. Do not inject faults or create artificial production findings to exercise issue transitions.
+Deployment checkpoint: [PR 1](https://github.com/daryll-swer/ip-geofeed/pull/1) merged normally as `1c9d029a3318456e615182329d180a910fa0ce8d`. The required check passed. The trusted live job passed both audit and publication verification, but its separate issue publisher exited 2 with `issue-publisher-incomplete` in [run 44932637785](https://github.com/daryll-swer/ip-geofeed/actions/runs/44932637785). No tracking issue exists. A second geographic CDN view still served the old LF file within the convergence window.
+
+Diagnosis: the publisher's token-format whitelist rejects dots and limits tokens to 512 characters. GitHub's current installation tokens are longer and contain dots; its official guidance requires opaque handling. This reproduces the early refusal with synthetic data and is consistent with the live failure. The actual credential was not retrieved or logged. Real run-metadata, time-filter and issue-list queries were separately checked read-only and succeeded.
+
+The correction is implemented and reviewed locally: opaque visible-ASCII tokens are bounded at 4,096 bytes, with whitespace/control rejection before connection; credentials remain confined to the fixed GitHub API origin without redirects. Generic headers retain their existing limit. Named diagnostic codes disclose no credential values. All 50 offline tests pass, including a mocked healthy entry point with synthetic legacy/stateless tokens and transport boundary tests.
+
+Publish the correction through the same protected PR path, then recheck workflows, CDN byte equality and healthy issue behaviour. Record final evidence before completion. Do not introduce false production findings to exercise issue transitions.

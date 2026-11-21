@@ -6,14 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 from typing import Callable
 from urllib.parse import urlencode
 
 from feed import network, no_duplicate_keys
 from github_state import TRUSTED_EVENTS, current_main, current_run, repository_name
 from report import CODE, MAX_FINDINGS, SEVERITY, SHA, STAGES
-from transport import Clock, Deadline, FetchError, Transport, public_ip
+from transport import Clock, Deadline, FetchError, Transport, public_ip, validate_github_token
 
 TITLE = "Geofeed validation findings"
 MARKER = "<!-- ip-geofeed-live-audit:v1 -->"
@@ -141,16 +140,27 @@ def main() -> int:
         print("issue-publisher-not-authorised")
         return 2
     try:
-        repository = repository_name(env["GITHUB_REPOSITORY"])
-        revision, token = env["GITHUB_SHA"], env["GH_ISSUE_TOKEN"]
-        run_id, attempt = int(env["GITHUB_RUN_ID"]), int(env["GITHUB_RUN_ATTEMPT"])
-        if not SHA.fullmatch(revision) or not re.fullmatch(r"[A-Za-z0-9_]{1,512}", token):
-            raise ValueError
-        if min(run_id, attempt) < 1:
-            raise ValueError
+        try:
+            repository = repository_name(env.get("GITHUB_REPOSITORY", ""))
+        except ValueError:
+            raise FetchError("invalid-workflow-repository") from None
+        revision = env.get("GITHUB_SHA", "")
+        if not SHA.fullmatch(revision):
+            raise FetchError("invalid-workflow-revision")
+        try:
+            run_id, attempt = int(env.get("GITHUB_RUN_ID", "")), int(env.get("GITHUB_RUN_ATTEMPT", ""))
+            if min(run_id, attempt) < 1:
+                raise ValueError
+        except ValueError:
+            raise FetchError("invalid-workflow-run") from None
+        token = env.get("GH_ISSUE_TOKEN", "")
+        validate_github_token(token)
         clock = Clock()
         deadline = Deadline(clock, clock.now() + 120)
-        transport = Transport()
+        try:
+            transport = Transport()
+        except OSError:
+            raise FetchError("transport-initialisation-unavailable") from None
         issues = Issues(transport, repository, token, deadline)
         result = update(issues, lambda: (
             current_run(transport, repository, revision, run_id, attempt, token, deadline)
@@ -158,8 +168,11 @@ def main() -> int:
         ), env.get("AUDIT_REPORT", ""), env.get("PUBLICATION_REPORT", ""), revision)
         print(f"issue-{result}")
         return 0
-    except (KeyError, OSError, ValueError, FetchError):
-        print("issue-publisher-incomplete")
+    except FetchError as exc:
+        print(f"issue-publisher-incomplete: {exc.code}")
+        return 2
+    except (KeyError, OSError, ValueError):
+        print("issue-publisher-incomplete: publisher-local-error")
         return 2
 
 

@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
@@ -146,6 +147,51 @@ class IssuesTests(unittest.TestCase):
                 patch("builtins.print"):
             self.assertEqual(main(), 2)
         network_client.assert_not_called()
+
+    def workflow_env(self, token):
+        return {"GITHUB_ACTIONS": "true", "GITHUB_REF": "refs/heads/main",
+                "GITHUB_EVENT_NAME": "push", "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": REVISION, "GITHUB_RUN_ID": "10", "GITHUB_RUN_ATTEMPT": "1",
+                "GH_ISSUE_TOKEN": token, "AUDIT_REPORT": self.audit,
+                "PUBLICATION_REPORT": self.publication}
+
+    def test_entrypoint_accepts_legacy_and_long_stateless_tokens(self):
+        run = {"id": 10, "run_number": 7, "run_attempt": 1, "event": "push",
+               "head_branch": "main", "head_sha": REVISION, "created_at": "2026-11-21T16:00:00Z",
+               "head_repository": {"full_name": "owner/repo"}}
+        for token in ("ghs_" + "a" * 36, "ghs_fixture_" + "a" * 40 + "." + "b" * 426 + "." + "c" * 40):
+            replies = [response(run), response({"workflow_runs": [run], "total_count": 1}),
+                       response({"ref": "refs/heads/main", "object": {"type": "commit", "sha": REVISION}}),
+                       response([])]
+            with self.subTest(length=len(token)), patch.dict(os.environ, self.workflow_env(token), clear=True), \
+                    patch("sys.argv", ["update_issue.py", "--apply"]), patch("builtins.print") as log, \
+                    patch("transport.Transport._exchange", side_effect=replies) as exchange:
+                self.assertEqual(main(), 0)
+                log.assert_called_once_with("issue-unchanged")
+            self.assertEqual(exchange.call_count, 4)
+            for call in exchange.call_args_list:
+                self.assertEqual((call.args[0].host, call.args[0].port), ("api.github.com", 443))
+                self.assertEqual(call.args[4] if len(call.args) > 4 else "GET", "GET")
+            self.assertEqual([call.kwargs.get("github_token") for call in exchange.call_args_list],
+                             [token, token, None, token])
+
+    def test_entrypoint_token_rejections_are_named_and_do_not_start_transport(self):
+        for token, code in (("", "github-token-missing"), ("x" * 4097, "github-token-size-limit"),
+                            ("synthetic\r\nInjected: secret", "github-token-unsafe-header"),
+                            ("synthetic\u00e9", "github-token-unsafe-header")):
+            with self.subTest(code=code), patch.dict(os.environ, self.workflow_env(token), clear=True), \
+                    patch("sys.argv", ["update_issue.py", "--apply"]), patch("builtins.print") as log, \
+                    patch("update_issue.Transport") as transport:
+                self.assertEqual(main(), 2)
+                transport.assert_not_called()
+                log.assert_called_once_with(f"issue-publisher-incomplete: {code}")
+
+    def test_entrypoint_emits_safe_fetch_error_code(self):
+        with patch.dict(os.environ, self.workflow_env("synthetic"), clear=True), \
+                patch("sys.argv", ["update_issue.py", "--apply"]), patch("builtins.print") as log, \
+                patch("update_issue.current_run", side_effect=FetchError("workflow-currency-unavailable")):
+            self.assertEqual(main(), 2)
+            log.assert_called_once_with("issue-publisher-incomplete: workflow-currency-unavailable")
 
     def test_issue_api_only_edits_marked_bot_issue(self):
         marked = {"number": 9, "title": "Previous title", "state": "open",

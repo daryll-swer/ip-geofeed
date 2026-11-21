@@ -66,6 +66,8 @@ The initial transport supports HTTP/1.1, identity bodies and a single gzip strea
 
 Run live audits on PR/main changes, by manual request and weekly at Saturday 12:00 IST (`30 6 * * 6` UTC). Scheduled execution is best effort. Only trusted main/scheduled/manual runs may maintain the deduplicated tracking issue. Include warnings, failures and incomplete checks, update meaningful changes, and close only after a complete current recovery. PR runs never receive issue-write credentials; isolate the trusted publisher and sanitise report content.
 
+Treat GitHub-issued credentials as opaque strings, not a fixed token format or a JWT to inspect. Check only presence, header safety and a bounded transport size. Authentication remains confined to the fixed GitHub API origin, without redirects; diagnostics must never include credential values. GitHub can change the issued token representation without changing its permissions.
+
 Workflow concurrency and currency checks immediately before writes reduce stale-result races. The revision/run check and issue update are separate API requests, not an atomic compare-and-swap: a revision can change between them. A later current run reconciles the issue; do not claim the REST sequence eliminates this final race.
 
 ## Consequences and Verification
@@ -87,3 +89,4 @@ Offline tests must exercise prefix containment, parser differences, authority bo
 - [pycountry data provenance](https://github.com/pycountry/pycountry).
 - [OWASP SSRF prevention](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html).
 - [GitHub Actions secure use](https://docs.github.com/en/actions/reference/security/secure-use).
+- [GitHub installation-token format change and opaque-token handling](https://github.blog/changelog/2026-10-02-stateless-github-app-installation-tokens-rolled-out/).
