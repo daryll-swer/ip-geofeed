@@ -1,79 +1,42 @@
 #!/usr/bin/env python3
-"""Validate the repository geofeed CSV."""
+"""Validate candidate CSV and policy without external dependencies at runtime."""
 
 from __future__ import annotations
 
-import csv
-import ipaddress
-import re
+import argparse
+import json
 import sys
-import unicodedata
 from pathlib import Path
 
-
-COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
-REGION_RE = re.compile(r"^[A-Z]{2}-[A-Z0-9]{1,3}$")
-POSTAL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .-]{0,20}$")
+from feed import POLICY_PATH, InputError, load_policy, net_key, parse_feed, read_bounded
 
 
-def fail(message: str) -> None:
-    print(f"ERROR: {message}", file=sys.stderr)
-    raise SystemExit(1)
-
-
-def validate(path: Path) -> None:
-    raw = path.read_bytes()
-    if raw.startswith(b"\xef\xbb\xbf"):
-        fail("geofeed.csv must not start with a UTF-8 BOM")
-
-    text = raw.decode("utf-8")
-    for index, char in enumerate(text):
-        category = unicodedata.category(char)
-        if category in {"Cf", "Cc"} and char not in "\r\n\t":
-            fail(
-                "hidden/control character at byte-like index "
-                f"{index}: U+{ord(char):04X} {unicodedata.name(char, 'UNKNOWN')}"
-            )
-
-    prefixes: set[str] = set()
-    for line_number, row in enumerate(csv.reader(text.splitlines()), 1):
-        if not row:
-            continue
-        if row[0].startswith("#"):
-            continue
-        if len(row) != 5:
-            fail(f"line {line_number}: expected 5 fields, got {len(row)}")
-
-        prefix, country, region, city, postal = [field.strip() for field in row]
-        if not prefix:
-            fail(f"line {line_number}: prefix is required")
-        try:
-            network = ipaddress.ip_network(prefix, strict=True)
-        except ValueError as exc:
-            fail(f"line {line_number}: invalid prefix {prefix!r}: {exc}")
-
-        canonical_prefix = str(network)
-        if canonical_prefix in prefixes:
-            fail(f"line {line_number}: duplicate prefix {canonical_prefix}")
-        prefixes.add(canonical_prefix)
-
-        if country and not COUNTRY_RE.fullmatch(country):
-            fail(f"line {line_number}: invalid ISO 3166-1 alpha-2 country {country!r}")
-        if region and not REGION_RE.fullmatch(region):
-            fail(f"line {line_number}: invalid ISO 3166-2 style region {region!r}")
-        if region and not country:
-            fail(f"line {line_number}: region is set but country is blank")
-        if city and not country:
-            fail(f"line {line_number}: city is set but country is blank")
-        if postal and not country:
-            fail(f"line {line_number}: postal code is set but country is blank")
-        if postal and not POSTAL_RE.fullmatch(postal):
-            fail(f"line {line_number}: invalid postal code syntax {postal!r}")
-
-    if not prefixes:
-        fail("no geofeed prefixes found")
-    print(f"OK: validated {len(prefixes)} geofeed prefixes")
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("geofeed", type=Path, nargs="?", default=Path("geofeed.csv"))
+    parser.add_argument("--policy", type=Path, default=POLICY_PATH)
+    parser.add_argument("--base", type=Path, help="Previous feed for a location-change review")
+    args = parser.parse_args()
+    try:
+        load_policy(args.policy)
+        feed = parse_feed(read_bounded(args.geofeed), own=True)
+        if args.base:
+            raw = read_bounded(args.base)
+            old = parse_feed(raw, own=False).rows if raw else {}
+            for prefix in sorted(old.keys() | feed.rows.keys(), key=net_key):
+                before, after = old.get(prefix), feed.rows.get(prefix)
+                if before != after:
+                    print(json.dumps({"prefix": str(prefix), "before": before, "after": after},
+                                     ensure_ascii=True))
+    except (OSError, InputError) as exc:
+        print(f"ERROR: {exc if isinstance(exc, InputError) else 'local-file-unavailable'}",
+              file=sys.stderr)
+        return 1
+    for code, line in feed.warnings:
+        print(f"WARNING: {code} (line {line})")
+    print(f"OK: validated {len(feed.rows)} geofeed prefixes and policy")
+    return 0
 
 
 if __name__ == "__main__":
-    validate(Path(sys.argv[1] if len(sys.argv) > 1 else "geofeed.csv"))
+    raise SystemExit(main())
